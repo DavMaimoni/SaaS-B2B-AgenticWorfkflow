@@ -30,7 +30,6 @@ jobs:
   #    Runs once eval/triples_smoke.jsonl and eval/recordings/ are committed (see README, "CI").
   replay-smoke:
     runs-on: ubuntu-latest
-    if: hashFiles('eval/triples_smoke.jsonl', 'eval/recordings/large.jsonl') != ''
     env:
       LLM_MODE: replay
       SMALL_PROVIDER: ${{ vars.SMALL_PROVIDER || 'ollama' }}
@@ -39,13 +38,28 @@ jobs:
       JUDGE_PROVIDER: openrouter
     steps:
       - uses: actions/checkout@v4
+      - name: Recordings committed?
+        id: check
+        run: |
+          if [ -f eval/triples_smoke.jsonl ] && [ -f eval/recordings/large.jsonl ] && [ -f eval/baseline_smoke.json ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "No recordings yet: skipping the replay (see README, step 7)."
+          fi
       - uses: astral-sh/setup-uv@v6
-      - run: uv sync --extra dev
-      - run: uv run python eval/run_eval.py --triples eval/triples_smoke.jsonl --out eval/runs/replay
-      - run: uv run python eval/summary.py check eval/runs/replay --baseline eval/baseline_smoke.json --thresholds eval/thresholds.json
+        if: steps.check.outputs.ready == 'true'
+      - if: steps.check.outputs.ready == 'true'
+        run: uv sync --extra dev
+      - if: steps.check.outputs.ready == 'true'
+        run: uv run python eval/run_eval.py --triples eval/triples_smoke.jsonl --out eval/runs/replay
+      - if: steps.check.outputs.ready == 'true'
+        run: uv run python eval/summary.py check eval/runs/replay --baseline eval/baseline_smoke.json --thresholds eval/thresholds.json
       - uses: actions/upload-artifact@v4
-        if: always()
-        with: {name: replay-smoke, path: eval/runs/replay}
+        if: always() && steps.check.outputs.ready == 'true'
+        with:
+          name: replay-smoke
+          path: eval/runs/replay
 
   # 3. Nightly: the 200 triples with real models. Secrets: OPENROUTER_API_KEY.
   #    The small model must be reachable from the runner: set the repository variables SMALL_PROVIDER,
@@ -69,4 +83,6 @@ jobs:
       - run: uv run python eval/summary.py check eval/runs/nightly --baseline eval/baseline.json --thresholds eval/thresholds.json
       - uses: actions/upload-artifact@v4
         if: always()
-        with: {name: nightly-${{ github.run_id }}, path: eval/runs/nightly}
+        with:
+          name: nightly-${{ github.run_id }}
+          path: eval/runs/nightly
