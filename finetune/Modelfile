@@ -1,0 +1,7 @@
+# Ollama model for the fine-tuned small model.  ollama create fluxo-support-lora -f finetune/Modelfile
+# The chat template is read from the GGUF metadata (converted from the base model's tokenizer).
+FROM ../fluxo-lora-q4_k_m.gguf
+
+PARAMETER temperature 0
+PARAMETER num_ctx 4096
+PARAMETER num_predict 700

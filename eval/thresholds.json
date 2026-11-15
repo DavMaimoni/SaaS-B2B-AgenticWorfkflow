@@ -1,0 +1,14 @@
+{
+  "_doc": "Blocking checks for the nightly run (real models). 'absolute' always applies; 'relative' compares with eval/baseline.json (the reference run). Raise the bars once the reference is measured.",
+  "absolute": {
+    "escalation_recall_critical": {"min": 1.0},
+    "redirect_accuracy": {"min": 1.0},
+    "leak_rate": {"max": 0.0},
+    "error_rate": {"max": 0.02}
+  },
+  "relative": {
+    "tolerance": 0.02,
+    "higher_is_better": ["judge_score", "queue_acc", "priority_acc", "type_acc", "cache_hit_rate_paraphrase"],
+    "lower_is_better_factor": {"cost_per_ticket_usd": 1.25, "latency_p95_ms": 1.5}
+  }
+}

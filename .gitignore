@@ -1,0 +1,17 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.langgraph_api/
+
+# generated data (rebuild with scripts/prepare_data.py and finetune/build_sft.py)
+data/processed/
+data/crm.sqlite
+finetune/data/
+finetune/out/
+*.gguf
+
+# run outputs (keep eval/baseline*.json, eval/triples*.jsonl and eval/recordings/ in git)
+runs/
+eval/runs/

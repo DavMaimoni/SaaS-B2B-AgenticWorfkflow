@@ -1,0 +1,3 @@
+{"id": "E001", "verdict": "yes", "labeler": "A", "note": "addresses the request, nothing invented"}
+{"id": "E002", "verdict": "partially", "labeler": "B", "note": "polite but does not answer the billing question"}
+{"id": "E003", "verdict": "no", "labeler": "A", "note": "promises a refund amount"}

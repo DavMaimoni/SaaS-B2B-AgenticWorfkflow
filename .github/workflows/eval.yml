@@ -1,0 +1,72 @@
+name: eval
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 2 * * *"        # nightly full evaluation with real models
+  workflow_dispatch:
+
+jobs:
+  # 1. Every PR: unit tests + the whole pipeline on mock models (deterministic, free, ~1 min).
+  tests-and-smoke:
+    runs-on: ubuntu-latest
+    env:
+      SMALL_PROVIDER: mock
+      LARGE_PROVIDER: mock
+      JUDGE_PROVIDER: mock
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --extra dev
+      - run: uv run pytest -q
+      - name: Pipeline regression test (mock models)
+        run: |
+          uv run python eval/run_eval.py --triples eval/triples.sample.jsonl --out eval/runs/ci-mock
+          uv run python eval/summary.py check eval/runs/ci-mock --baseline eval/baseline_ci.json --thresholds eval/thresholds.ci.json
+
+  # 2. Every PR: 40 real triples replayed from recorded model answers (no API call, no cost).
+  #    Runs once eval/triples_smoke.jsonl and eval/recordings/ are committed (see README, "CI").
+  replay-smoke:
+    runs-on: ubuntu-latest
+    if: hashFiles('eval/triples_smoke.jsonl', 'eval/recordings/large.jsonl') != ''
+    env:
+      LLM_MODE: replay
+      SMALL_PROVIDER: ${{ vars.SMALL_PROVIDER || 'ollama' }}
+      SMALL_MODEL: ${{ vars.SMALL_MODEL || 'fluxo-support-lora' }}
+      LARGE_PROVIDER: openrouter
+      JUDGE_PROVIDER: openrouter
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --extra dev
+      - run: uv run python eval/run_eval.py --triples eval/triples_smoke.jsonl --out eval/runs/replay
+      - run: uv run python eval/summary.py check eval/runs/replay --baseline eval/baseline_smoke.json --thresholds eval/thresholds.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: {name: replay-smoke, path: eval/runs/replay}
+
+  # 3. Nightly: the 200 triples with real models. Secrets: OPENROUTER_API_KEY.
+  #    The small model must be reachable from the runner: set the repository variables SMALL_PROVIDER,
+  #    SMALL_MODEL and SMALL_BASE_URL to a hosted copy of the LoRA (or to its base model on OpenRouter).
+  nightly-full:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    env:
+      LLM_MODE: live
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      SMALL_PROVIDER: ${{ vars.SMALL_PROVIDER || 'openrouter' }}
+      SMALL_MODEL: ${{ vars.SMALL_MODEL || 'meta-llama/llama-3.2-3b-instruct' }}
+      SMALL_BASE_URL: ${{ vars.SMALL_BASE_URL }}
+      LARGE_PROVIDER: openrouter
+      JUDGE_PROVIDER: openrouter
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --extra dev
+      - run: uv run python eval/run_eval.py --triples eval/triples.jsonl --out eval/runs/nightly
+      - run: uv run python eval/summary.py check eval/runs/nightly --baseline eval/baseline.json --thresholds eval/thresholds.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: {name: nightly-${{ github.run_id }}, path: eval/runs/nightly}

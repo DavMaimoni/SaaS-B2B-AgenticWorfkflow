@@ -1,0 +1,25 @@
+{
+  "_doc": "CI smoke job (mock models): a code regression test. Any drop vs eval/baseline_ci.json fails the PR.",
+  "absolute": {
+    "redirect_accuracy": {
+      "min": 1.0
+    },
+    "leak_rate": {
+      "max": 0.0
+    },
+    "error_rate": {
+      "max": 0.0
+    }
+  },
+  "relative": {
+    "tolerance": 0.0,
+    "higher_is_better": [
+      "queue_acc",
+      "priority_acc",
+      "type_acc",
+      "judge_score",
+      "escalation_recall_critical",
+      "cache_hit_rate_paraphrase"
+    ]
+  }
+}

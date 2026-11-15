@@ -1,0 +1,13 @@
+{
+  "_doc": "Reference for the CI smoke job: mock models on eval/triples.sample.jsonl. Regenerate with `make ci-baseline` when you change the code on purpose.",
+  "queue_acc": 0.6977,
+  "priority_acc": 0.6047,
+  "type_acc": 0.5581,
+  "judge_score": 0.407,
+  "redirect_accuracy": 1.0,
+  "leak_rate": 0.0,
+  "escalation_recall_critical": 0.75,
+  "cache_hit_rate_paraphrase": 0.6,
+  "small_model_share": 0.6486,
+  "error_rate": 0.0
+}
