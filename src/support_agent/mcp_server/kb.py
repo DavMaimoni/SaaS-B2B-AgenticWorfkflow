@@ -6,6 +6,7 @@ retriever of our RAG project, replace `search` and keep its signature.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 from functools import lru_cache
@@ -64,6 +65,30 @@ class KnowledgeBase:
         return self.by_id.get(article_id)
 
 
-@lru_cache(maxsize=1)
-def knowledge_base() -> KnowledgeBase:
-    return KnowledgeBase()
+_versions_memo: dict[Path, tuple[tuple[int, int], str, str]] = {}   # path -> ((mtime_ns, size), id, hash)
+
+
+def article_versions(directory: Path = KB_DIR) -> dict[str, str]:
+    """{article id: content hash}. Only files whose mtime or size changed are re-read, so it is cheap per ticket.
+    The semantic cache compares it with the versions stored in each entry to drop answers built on old articles."""
+    out = {}
+    for path in sorted(Path(directory).glob("*.md")):
+        st = path.stat()
+        stamp = (st.st_mtime_ns, st.st_size)
+        memo = _versions_memo.get(path)
+        if not memo or memo[0] != stamp:
+            raw = path.read_bytes()
+            memo = (stamp, _parse(path).id, hashlib.sha256(raw).hexdigest()[:16])
+            _versions_memo[path] = memo
+        out[memo[1]] = memo[2]
+    return out
+
+
+@lru_cache(maxsize=4)
+def _knowledge_base(directory: Path, fingerprint: tuple) -> KnowledgeBase:
+    return KnowledgeBase(directory)
+
+
+def knowledge_base(directory: Path = KB_DIR) -> KnowledgeBase:
+    """The help center, rebuilt when an article is added, removed or edited."""
+    return _knowledge_base(Path(directory), tuple(sorted(article_versions(directory).items())))

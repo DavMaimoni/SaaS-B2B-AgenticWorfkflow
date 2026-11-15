@@ -32,6 +32,15 @@ def test_outage_goes_to_large_model_and_is_escalated_through_mcp(app):
     assert out["escalation"]["ticket_id"].startswith("TCK-") and out["escalation"]["team"] == "sre"
 
 
+def test_failed_mcp_write_is_not_counted_as_an_escalation(app):
+    # A malformed customer email makes create_ticket fail validation: no human team gets the ticket.
+    out = run_ticket(app, "Application down", "The application is down for our whole team, 503 everywhere. Urgent!",
+                     customer_email="not-an-email")
+    assert out["status"] == "escalation_failed"
+    assert "error" in out["escalation"] and "ticket_id" not in out["escalation"]
+    assert out["answer"]                                     # the customer still gets the holding reply
+
+
 def test_refund_request_is_never_answered_by_the_small_model_alone(app):
     out = run_ticket(app, "Charged twice", "Our card was charged twice this month, please refund the extra charge.",
                      customer_email="admin@quanta-labs.example.com")

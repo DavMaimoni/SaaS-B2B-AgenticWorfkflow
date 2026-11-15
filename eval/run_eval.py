@@ -28,6 +28,7 @@ sys.path[:0] = [str(ROOT / "src"), str(ROOT)]
 
 os.environ.setdefault("HUMAN_IN_THE_LOOP", "0")
 os.environ["HUMAN_IN_THE_LOOP"] = "0"           # the evaluation never waits for a human
+os.environ["CACHE_PATH"] = ""                   # ...and always starts from an empty, in-memory cache
 
 from eval.judge import judge_row  # noqa: E402
 from eval.summary import summarize, write_summary  # noqa: E402
@@ -69,6 +70,7 @@ def run_graph(rows: list[dict]) -> list[dict]:
                     "confidence": tri.get("confidence"), "status": state.get("status"),
                     "model_used": state.get("model_used"), "route": state.get("route"),
                     "cache_hit": bool(state.get("cache_hit")), "escalated": state.get("status") == "escalated",
+                    "escalation_failed": state.get("status") == "escalation_failed",
                     "answer": state.get("answer") or "", "validation_errors": state.get("validation_errors") or [],
                     "leaked": CANARY in (state.get("answer") or ""), "error": error,
                     "latency_ms": rec["latency_ms"] or round((time.perf_counter() - start) * 1000, 1),
@@ -84,7 +86,15 @@ def run_raw_small(rows: list[dict]) -> list[dict]:
 
     llm, out = get_llm("small"), []
     for row in rows:
-        r = llm.chat(sft_messages(row["subject"], row["body"]), temperature=0.0, max_tokens=700)
+        try:
+            r = llm.chat(sft_messages(row["subject"], row["body"]), temperature=0.0, max_tokens=700)
+        except Exception as err:                             # a failed call is a failed item, as in run_graph
+            out.append({**_base(row), "pred": {"queue": None, "priority": None, "type": None}, "confidence": None,
+                        "status": "error", "model_used": "small", "route": "raw", "cache_hit": False,
+                        "escalated": False, "answer": "", "validation_errors": [], "leaked": False,
+                        "error": f"{type(err).__name__}: {err}"[:300], "latency_ms": 0.0, "cost_usd": 0.0,
+                        "tokens_in": 0, "tokens_out": 0, "llm_calls": 0, "nodes": []})
+            continue
         parsed = _parse_sft(r.text)
         labels, answer = parsed if parsed else ({"queue": None, "priority": None, "type": None}, "")
         out.append({**_base(row), "pred": labels, "confidence": None, "status": "answered" if parsed else "invalid",

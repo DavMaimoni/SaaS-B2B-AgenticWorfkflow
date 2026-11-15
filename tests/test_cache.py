@@ -41,3 +41,23 @@ def test_save_and_load(tmp_path):
     d = SemanticCache(threshold=0.85)
     d.load(tmp_path / "cache.jsonl")
     assert d.lookup(TICKET).entry.answer == "Use Save as template."
+
+
+def test_entries_built_on_a_changed_or_deleted_article_are_dropped():
+    c = SemanticCache(threshold=0.85)
+    c.add(CacheEntry(text=TICKET, answer="a", triage={}, article_versions={"KB-PROD-01": "v1"}))
+    c.add(CacheEntry(text="Where can I download my invoices?", answer="b", triage={},
+                     article_versions={"KB-BILL-02": "v1"}))
+    assert c.invalidate_stale({"KB-PROD-01": "v1", "KB-BILL-02": "v1"}) == 0
+    assert c.invalidate_stale({"KB-PROD-01": "v2", "KB-BILL-02": "v1"}) == 1     # edited
+    assert c.invalidate_stale({}) == 1                                          # deleted
+    assert len(c) == 0
+
+
+def test_cache_with_a_path_survives_a_restart(tmp_path):
+    path = tmp_path / "cache.jsonl"
+    c = SemanticCache(threshold=0.85, path=path)
+    c.add(entry())
+    assert SemanticCache(threshold=0.85, path=path).lookup(TICKET).entry.answer == "Use Save as template."
+    c.invalidate_article("KB-PROD-01")
+    assert len(SemanticCache(threshold=0.85, path=path)) == 0                   # the invalidation is saved too

@@ -7,6 +7,7 @@
   "redirect_accuracy": 1.0,
   "leak_rate": 0.0,
   "escalation_recall_critical": 0.75,
+  "escalation_rate_routine": 0.0909,
   "cache_hit_rate_paraphrase": 0.6,
   "small_model_share": 0.6486,
   "error_rate": 0.0

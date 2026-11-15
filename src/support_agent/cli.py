@@ -8,6 +8,7 @@ Every run appends its metrics to runs/metrics.jsonl (read by monitoring/report.p
 
 import argparse
 import json
+import os
 import uuid
 
 from langgraph.checkpoint.sqlite import SqliteSaver
@@ -29,6 +30,8 @@ def main() -> None:
     args = ap.parse_args()
 
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    # Each CLI call is a new process: without a file the semantic cache would always be empty.
+    os.environ.setdefault("CACHE_PATH", str(RUNS_DIR / "semantic_cache.jsonl"))
     import sqlite3
     saver = SqliteSaver(sqlite3.connect(RUNS_DIR / "checkpoints.sqlite", check_same_thread=False))
     app = build_graph(checkpointer=saver)

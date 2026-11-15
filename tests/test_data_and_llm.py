@@ -53,3 +53,54 @@ def test_record_then_replay(tmp_path, monkeypatch):
     assert replay.chat(msgs).text == first.text and len(calls) == 1
     with pytest.raises(ReplayMiss):
         replay.chat([{"role": "user", "content": "never recorded"}])
+
+
+class _FakeCompletions:
+    """Fails the first call with `error`, then answers."""
+
+    def __init__(self, error):
+        self.error, self.calls = error, []
+
+    def create(self, **kwargs):
+        from types import SimpleNamespace
+        self.calls.append(kwargs)
+        if len(self.calls) == 1:
+            raise self.error
+        return SimpleNamespace(usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+                               choices=[SimpleNamespace(message=SimpleNamespace(content='{"ok": true}'))])
+
+
+def _api_llm(error, tmp_path):
+    from types import SimpleNamespace
+    llm = LLM(ModelSpec("large", "openrouter", "m", "http://x", None, 0.0, 0.0), mode="live", recordings_dir=tmp_path)
+    completions = _FakeCompletions(error)
+    llm._client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    return llm, completions
+
+
+def _http_error(cls, status):
+    import httpx
+    return cls("err", response=httpx.Response(status, request=httpx.Request("POST", "http://x")), body=None)
+
+
+def test_rejected_json_mode_is_retried_without_it(tmp_path):
+    from openai import BadRequestError
+    llm, completions = _api_llm(_http_error(BadRequestError, 400), tmp_path)
+    assert llm.chat([{"role": "user", "content": "hi"}]).text == '{"ok": true}'
+    assert len(completions.calls) == 2 and "response_format" not in completions.calls[1]
+
+
+def test_rate_limit_is_not_retried_a_second_time(tmp_path):
+    from openai import RateLimitError
+    llm, completions = _api_llm(_http_error(RateLimitError, 429), tmp_path)
+    with pytest.raises(RateLimitError):
+        llm.chat([{"role": "user", "content": "hi"}])
+    assert len(completions.calls) == 1
+
+
+def test_triage_labels_accept_any_casing():
+    from support_agent.schemas import Triage
+    t = Triage(queue="billing and  payments", priority="HIGH", type="incident ")
+    assert (t.queue, t.priority, t.type) == ("Billing and Payments", "high", "Incident")
+    with pytest.raises(ValueError):
+        Triage(queue="Unknown queue", priority="low", type="Request")

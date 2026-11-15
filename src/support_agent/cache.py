@@ -3,7 +3,9 @@
 Rules (see the project doc):
 - only generic answers are stored (cacheable queue and type, no account data, not escalated);
 - a hit needs cosine similarity >= threshold (calibrate it with `eval/calibrate.py cache`);
-- entries expire after a TTL, and every entry citing a KB article is dropped when that article changes.
+- entries expire after a TTL, and an entry is dropped as soon as one of the KB articles it was built on changes
+  (each entry stores the content hash of those articles: `invalidate_stale`);
+- with a `path` (CACHE_PATH), every change is written to a JSONL file, so the cache survives a restart.
 FAISS is used when installed (inner product on normalised vectors = cosine), numpy otherwise.
 """
 
@@ -27,6 +29,8 @@ class CacheEntry:
     triage: dict
     cited_articles: list[str] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
+    # {article id: content hash} of every article the answer may depend on (cited or given as context).
+    article_versions: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -36,7 +40,8 @@ class CacheHit:
 
 
 class SemanticCache:
-    def __init__(self, threshold: float | None = None, ttl_seconds: int | None = None, embedder=None):
+    def __init__(self, threshold: float | None = None, ttl_seconds: int | None = None, embedder=None,
+                 path: Path | str | None = None):
         s = settings()
         self.threshold = s.cache_threshold if threshold is None else threshold
         self.ttl = s.cache_ttl_seconds if ttl_seconds is None else ttl_seconds
@@ -44,6 +49,9 @@ class SemanticCache:
         self.entries: list[CacheEntry] = []
         self.vectors: np.ndarray | None = None
         self._faiss = None
+        self.path = Path(path) if path else None
+        if self.path:
+            self.load(self.path)
 
     def __len__(self) -> int:
         return len(self.entries)
@@ -73,16 +81,26 @@ class SemanticCache:
         self.entries.append(entry)
         self.vectors = vec if self.vectors is None else np.vstack([self.vectors, vec])
         self._rebuild_index()
+        self._persist()
 
     # -- invalidation --------------------------------------------------------------------------------------------
     def invalidate_article(self, article_id: str) -> int:
-        """Drop every entry that cited this article. Returns how many were dropped."""
-        keep = [i for i, e in enumerate(self.entries) if article_id not in e.cited_articles]
-        return self._keep(keep)
+        """Drop every entry built on this article. Returns how many were dropped."""
+        keep = [i for i, e in enumerate(self.entries)
+                if article_id not in e.cited_articles and article_id not in e.article_versions]
+        return self._keep(keep) if len(keep) != len(self.entries) else 0
+
+    def invalidate_stale(self, current: dict[str, str]) -> int:
+        """Drop every entry built on an article whose content changed or that was deleted.
+        `current` is {article id: content hash} for the help center now (see `mcp_server.kb.article_versions`)."""
+        keep = [i for i, e in enumerate(self.entries)
+                if all(current.get(aid) == h for aid, h in e.article_versions.items())]
+        return self._keep(keep) if len(keep) != len(self.entries) else 0
 
     def clear(self) -> None:
         self.entries, self.vectors = [], None
         self._rebuild_index()
+        self._persist()
 
     def _expire(self) -> None:
         if self.ttl <= 0 or not self.entries:
@@ -97,6 +115,7 @@ class SemanticCache:
         self.entries = [self.entries[i] for i in keep]
         self.vectors = self.vectors[keep] if keep else None
         self._rebuild_index()
+        self._persist()
         return dropped
 
     def _rebuild_index(self) -> None:
@@ -119,11 +138,18 @@ class SemanticCache:
                 f.write(json.dumps(asdict(e), ensure_ascii=False) + "\n")
 
     def load(self, path: Path) -> None:
-        self.clear()
-        if path.exists():
-            for line in path.read_text(encoding="utf-8").splitlines():
-                if line.strip():
-                    self.add(CacheEntry(**json.loads(line)))
+        """Replace the entries with the file's (expired ones are dropped on the next lookup)."""
+        path = Path(path)
+        rows = [json.loads(x) for x in path.read_text(encoding="utf-8").splitlines() if x.strip()]             if path.exists() else []
+        self.entries = [CacheEntry(**r) for r in rows]
+        self.vectors = self.embedder.encode([e.text for e in self.entries]) if self.entries else None
+        self._rebuild_index()
+
+    def _persist(self) -> None:
+        if self.path:
+            tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+            self.save(tmp)
+            tmp.replace(self.path)                     # atomic: a crash never leaves a half-written cache
 
 
 _shared: SemanticCache | None = None
@@ -133,7 +159,7 @@ def shared_cache() -> SemanticCache:
     """The process-wide cache used by the graph."""
     global _shared
     if _shared is None:
-        _shared = SemanticCache()
+        _shared = SemanticCache(path=settings().cache_path)
     return _shared
 
 

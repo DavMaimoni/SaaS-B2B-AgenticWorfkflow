@@ -90,6 +90,9 @@ class Settings:
     cache_enabled: bool = field(default_factory=lambda: os.getenv("CACHE_ENABLED", "1") == "1")
     cache_threshold: float = field(default_factory=lambda: float(os.getenv("CACHE_THRESHOLD", 0.92)))
     cache_ttl_seconds: int = field(default_factory=lambda: int(os.getenv("CACHE_TTL_SECONDS", 7 * 24 * 3600)))
+    # JSONL file the cache is kept in ("" = memory only). The CLI defaults it to runs/semantic_cache.jsonl; the
+    # evaluation always runs with an empty in-memory cache.
+    cache_path: str = field(default_factory=lambda: os.getenv("CACHE_PATH", ""))
     embedder: str = field(default_factory=lambda: os.getenv("EMBEDDER", "hashing"))                     # hashing | e5
     e5_model: str = field(default_factory=lambda: os.getenv("E5_MODEL", "intfloat/multilingual-e5-small"))
 

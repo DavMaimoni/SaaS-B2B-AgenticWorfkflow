@@ -10,6 +10,7 @@ def offline(monkeypatch, tmp_path):
     monkeypatch.setenv("LLM_MODE", "live")
     monkeypatch.setenv("EMBEDDER", "hashing")
     monkeypatch.setenv("CACHE_ENABLED", "1")
+    monkeypatch.setenv("CACHE_PATH", "")
     monkeypatch.setenv("HUMAN_IN_THE_LOOP", "0")
     monkeypatch.setenv("RUNS_DIR", str(tmp_path / "runs"))
     monkeypatch.setenv("CRM_PATH", ":memory:")

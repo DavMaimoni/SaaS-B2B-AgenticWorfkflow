@@ -32,6 +32,7 @@ def run_record(state: dict, source: str, ticket_id: str | None = None, **extra) 
         "cache_hit": bool(state.get("cache_hit")), "queue": tri.get("queue"), "priority": tri.get("priority"),
         "type": tri.get("type"), "confidence": tri.get("confidence"),
         "escalated": state.get("status") == "escalated",
+        "escalation_failed": state.get("status") == "escalation_failed",
         "validation_errors": state.get("validation_errors", []),
         "latency_ms": round(sum(r["latency_ms"] for r in rows), 1),
         "cost_usd": round(sum(r["cost_usd"] for r in rows), 8),

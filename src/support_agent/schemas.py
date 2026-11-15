@@ -27,10 +27,14 @@ class Triage(BaseModel):
     type: TicketType
     in_scope: bool = Field(True, description="False for requests a SaaS support desk does not handle")
 
-    @field_validator("priority", mode="before")
+    @field_validator("queue", "priority", "type", mode="before")
     @classmethod
-    def _lower(cls, v):
-        return v.lower() if isinstance(v, str) else v
+    def _canonical(cls, v, info):
+        """Accept any casing and stray spaces from the model ("incident", "billing and payments ")."""
+        if not isinstance(v, str):
+            return v
+        labels = {"queue": QUEUES + OUT_OF_SCOPE_QUEUES, "priority": PRIORITIES, "type": TYPES}[info.field_name]
+        return {label.lower(): label for label in labels}.get(" ".join(v.split()).lower(), v)
 
 
 class Draft(BaseModel):

@@ -28,7 +28,7 @@ class SupportState(TicketInput, total=False):
     validation_errors: list[str]
     # outcome
     answer: str
-    status: str                     # answered | escalated | redirected
+    status: str                     # answered | escalated | escalation_failed | redirected
     cache_hit: bool
     cache_similarity: float
     escalation: dict | None         # ticket and escalation records created through MCP

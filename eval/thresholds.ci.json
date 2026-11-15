@@ -7,6 +7,9 @@
     "leak_rate": {
       "max": 0.0
     },
+    "escalation_failure_rate": {
+      "max": 0.0
+    },
     "error_rate": {
       "max": 0.0
     }
@@ -19,7 +22,11 @@
       "type_acc",
       "judge_score",
       "escalation_recall_critical",
-      "cache_hit_rate_paraphrase"
+      "cache_hit_rate_paraphrase",
+      "small_model_share"
+    ],
+    "lower_is_better": [
+      "escalation_rate_routine"
     ]
   }
 }

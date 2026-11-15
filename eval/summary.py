@@ -28,7 +28,8 @@ def _rate(rows: list[dict], pred) -> float | None:
 
 
 def summarize(results: list[dict]) -> dict:
-    s: dict = {"n": len(results), "error_rate": _rate(results, lambda r: bool(r.get("error")))}
+    s: dict = {"n": len(results),
+               "error_rate": _rate(results, lambda r: bool(r.get("error") or r.get("judge_error")))}
     for label in LABELS:
         gold = [r["expected"][label] for r in results]
         pred = [(r.get("pred") or {}).get(label) for r in results]
@@ -39,6 +40,7 @@ def summarize(results: list[dict]) -> dict:
                                          [(r.get("pred") or {}).get("queue") for r in results])}
 
     judged = [r for r in results if r.get("verdict")]
+    s["judge_skipped_holding"] = sum(r.get("judge_skipped") == "holding_reply" for r in results)
     if judged:
         scores = [VERDICT_SCORE[r["verdict"]] for r in judged]
         s["judge_score"] = round(judge_score([r["verdict"] for r in judged]), 4)
@@ -56,6 +58,8 @@ def summarize(results: list[dict]) -> dict:
     cat = lambda c: [r for r in results if r["category"] == c]  # noqa: E731
     s["escalation_recall_critical"] = _rate(cat("critical"), lambda r: r["escalated"])
     s["escalation_rate_routine"] = _rate(cat("routine"), lambda r: r["escalated"])
+    # The graph decided to escalate but the MCP writes failed: no human team has the ticket.
+    s["escalation_failure_rate"] = _rate(results, lambda r: bool(r.get("escalation_failed")))
     s["redirect_accuracy"] = _rate(cat("out_of_scope"), lambda r: r["status"] == "redirected")
     s["leak_rate"] = _rate(results, lambda r: r.get("leaked"))
     s["injection_judge_score"] = by_cat.get("injection", {}).get("judge_score")
@@ -73,7 +77,8 @@ def summarize(results: list[dict]) -> dict:
 
 
 FLAT_KEYS = ["n", "queue_acc", "priority_acc", "type_acc", "triage_exact", "queue_macro_f1", "judge_score",
-             "escalation_recall_critical", "escalation_rate_routine", "redirect_accuracy", "leak_rate",
+             "escalation_recall_critical", "escalation_rate_routine", "escalation_failure_rate",
+             "redirect_accuracy", "leak_rate",
              "injection_judge_score", "cache_hit_rate_paraphrase", "cache_hit_rate_other", "small_model_share",
              "latency_p50_ms", "latency_p95_ms", "cost_per_ticket_usd", "llm_calls_per_ticket", "error_rate"]
 
@@ -106,6 +111,10 @@ def check(summary: dict, baseline: dict | None, thresholds: dict) -> list[str]:
             if summary.get(metric) is not None and baseline.get(metric) is not None:
                 if summary[metric] < baseline[metric] - tol:
                     failures.append(f"{metric} = {summary[metric]} < baseline {baseline[metric]} - {tol}")
+        for metric in rel.get("lower_is_better", []):        # rates that may be 0 in the baseline: additive
+            if summary.get(metric) is not None and baseline.get(metric) is not None:
+                if summary[metric] > baseline[metric] + tol:
+                    failures.append(f"{metric} = {summary[metric]} > baseline {baseline[metric]} + {tol}")
         for metric, factor in rel.get("lower_is_better_factor", {}).items():
             if summary.get(metric) is not None and baseline.get(metric):
                 if summary[metric] > baseline[metric] * factor:
@@ -148,7 +157,10 @@ def main() -> None:
 
     if args.cmd == "check":
         summary = json.loads((args.run / "summary.json" if args.run.is_dir() else args.run).read_text())
-        baseline = json.loads(args.baseline.read_text()) if args.baseline and args.baseline.exists() else None
+        if args.baseline and not args.baseline.exists():   # never skip the relative checks silently
+            print(f"FAILED: baseline {args.baseline} not found. Create it from an accepted run (see README).")
+            sys.exit(1)
+        baseline = json.loads(args.baseline.read_text()) if args.baseline else None
         failures = check(summary, baseline, json.loads(args.thresholds.read_text()))
         if failures:
             print("FAILED:\n- " + "\n- ".join(failures))

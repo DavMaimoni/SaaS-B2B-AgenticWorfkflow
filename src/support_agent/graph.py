@@ -10,6 +10,9 @@ START → cache_lookup ─hit─────────────────
                           invalid small reply → generate_large (1 retry)
                           invalid large reply, needs a human, high priority → escalate (MCP writes, interrupt) → finalize
                           ok → cache_write → finalize
+
+cache_lookup first screens the ticket with the injection / sensitive rules: a flagged ticket never takes a cached
+answer. It also drops cached answers built on help-center articles that changed since.
 """
 
 from __future__ import annotations

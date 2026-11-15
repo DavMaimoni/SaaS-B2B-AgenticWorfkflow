@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
-      - run: uv sync --extra dev
+      - run: uv sync --locked --extra dev
       - run: uv run pytest -q
       - name: Pipeline regression test (mock models)
         run: |
@@ -41,16 +41,21 @@ jobs:
       - name: Recordings committed?
         id: check
         run: |
-          if [ -f eval/triples_smoke.jsonl ] && [ -f eval/recordings/large.jsonl ] && [ -f eval/baseline_smoke.json ]; then
+          missing=""
+          for f in eval/triples_smoke.jsonl eval/baseline_smoke.json \
+                   eval/recordings/small.jsonl eval/recordings/large.jsonl eval/recordings/judge.jsonl; do
+            [ -f "$f" ] || missing="$missing $f"
+          done
+          if [ -z "$missing" ]; then
             echo "ready=true" >> "$GITHUB_OUTPUT"
           else
             echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "No recordings yet: skipping the replay (see README, step 7)."
+            echo "::warning::Replay smoke skipped, missing:$missing (see README, step 7)."
           fi
       - uses: astral-sh/setup-uv@v6
         if: steps.check.outputs.ready == 'true'
       - if: steps.check.outputs.ready == 'true'
-        run: uv sync --extra dev
+        run: uv sync --locked --extra dev
       - if: steps.check.outputs.ready == 'true'
         run: uv run python eval/run_eval.py --triples eval/triples_smoke.jsonl --out eval/runs/replay
       - if: steps.check.outputs.ready == 'true'
@@ -77,12 +82,29 @@ jobs:
       JUDGE_PROVIDER: openrouter
     steps:
       - uses: actions/checkout@v4
+      - name: Evaluation set and baseline committed?
+        id: check
+        run: |
+          missing=""
+          for f in eval/triples.jsonl eval/baseline.json; do
+            [ -f "$f" ] || missing="$missing $f"
+          done
+          if [ -z "$missing" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Nightly evaluation skipped, missing:$missing (see README, steps 2 and 6)."
+          fi
       - uses: astral-sh/setup-uv@v6
-      - run: uv sync --extra dev
-      - run: uv run python eval/run_eval.py --triples eval/triples.jsonl --out eval/runs/nightly
-      - run: uv run python eval/summary.py check eval/runs/nightly --baseline eval/baseline.json --thresholds eval/thresholds.json
+        if: steps.check.outputs.ready == 'true'
+      - if: steps.check.outputs.ready == 'true'
+        run: uv sync --locked --extra dev
+      - if: steps.check.outputs.ready == 'true'
+        run: uv run python eval/run_eval.py --triples eval/triples.jsonl --out eval/runs/nightly
+      - if: steps.check.outputs.ready == 'true'
+        run: uv run python eval/summary.py check eval/runs/nightly --baseline eval/baseline.json --thresholds eval/thresholds.json
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: always() && steps.check.outputs.ready == 'true'
         with:
           name: nightly-${{ github.run_id }}
           path: eval/runs/nightly

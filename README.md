@@ -54,7 +54,7 @@ Everything runs with **mock models** by default (keyword rules), so you can chec
 
 ```bash
 uv sync --extra dev
-uv run pytest -q                                              # 37 tests
+uv run pytest -q                                              # 57 tests
 uv run python scripts/prepare_data.py --sample                # 48 hand-written demo tickets
 uv run python eval/build_triples.py --sample                  # 43 demo triples
 uv run python eval/run_eval.py --out eval/runs/demo           # the whole pipeline on mock models
@@ -86,7 +86,7 @@ Before the LoRA exists, use the base model as small model (`SMALL_MODEL=qwen2.5:
 uv run python scripts/prepare_data.py
 # 2. evaluation set: 200 triples + 40 smoke triples           -> eval/triples.jsonl, eval/triples_smoke.jsonl
 uv run python eval/build_triples.py
-# 3. reference: large model only, no cache                     -> eval/runs/reference, then copy summary to eval/baseline.json
+# 3. reference: large model only, no cache                     -> eval/runs/reference (for the report, NOT the CI baseline)
 SMALL_PROVIDER=openrouter SMALL_MODEL=deepseek/deepseek-v4.1-flash CACHE_ENABLED=0 \
   uv run python eval/run_eval.py --out eval/runs/reference
 # 4. LoRA: see finetune/README.md (build_sft.py, train_lora.py on a GPU, export to Ollama)
@@ -94,8 +94,9 @@ SMALL_PROVIDER=openrouter SMALL_MODEL=deepseek/deepseek-v4.1-flash CACHE_ENABLED
 uv run python eval/calibrate.py cache --triples eval/triples.jsonl          # -> CACHE_THRESHOLD
 uv run python eval/calibrate.py router --run eval/runs/system               # -> ROUTE_CONFIDENCE
 uv run python eval/calibrate.py judge --run eval/runs/system --labels eval/judge_labels.jsonl
-# 6. full system
+# 6. full system; once accepted, it becomes the nightly baseline (refresh it after every accepted change)
 uv run python eval/run_eval.py --out eval/runs/system
+cp eval/runs/system/summary.json eval/baseline.json
 # 7. record the smoke run for CI replay, then commit eval/recordings/ and eval/baseline_smoke.json
 LLM_MODE=record uv run python eval/run_eval.py --triples eval/triples_smoke.jsonl --out eval/runs/smoke
 cp eval/runs/smoke/summary.json eval/baseline_smoke.json
@@ -123,9 +124,13 @@ Compare two runs with a paired bootstrap: `uv run python eval/summary.py compare
   1. every PR: unit tests + the whole pipeline on mock models, checked against `eval/baseline_ci.json`;
   2. every PR, once recordings are committed: the 40 smoke triples replayed from `eval/recordings/` (free,
      deterministic), checked against `eval/baseline_smoke.json`;
-  3. nightly: the 200 triples with real models (`OPENROUTER_API_KEY` secret), checked against `eval/baseline.json`.
-- **Blocking thresholds** (`eval/thresholds.json`): 100 % escalation of critical tickets, 100 % redirects,
-  0 leaks, ≤ 2 % errors, no drop of more than 2 points versus the baseline, cost ≤ 1.25 × baseline.
+  3. nightly: the 200 triples with real models (`OPENROUTER_API_KEY` secret), checked against `eval/baseline.json`
+     (the last accepted full-system run). Jobs 2 and 3 are skipped with a warning until their files are committed.
+- **Blocking thresholds** (`eval/thresholds.json`): 100 % escalation of critical tickets, 0 failed escalations
+  (MCP write failed), 100 % redirects, 0 leaks, ≤ 2 % errors (a missing replay recording counts as an error), no
+  move of more than 5 points versus the baseline on quality, small-model share and routine over-escalation,
+  cost ≤ 1.25 × baseline. `eval/summary.py check` fails if the `--baseline` file does not exist.
+- `uv.lock` is committed; CI installs with `uv sync --locked`.
 
 ## Monitoring
 

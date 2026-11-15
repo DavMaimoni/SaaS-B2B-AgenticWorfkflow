@@ -15,7 +15,8 @@ from pydantic import ValidationError
 from support_agent import prompts
 from support_agent.cache import CacheEntry, shared_cache
 from support_agent.config import CACHEABLE_QUEUES, CACHEABLE_TYPES, OUT_OF_SCOPE_QUEUES, settings
-from support_agent.llm import LLMResult, get_llm, parse_json
+from support_agent.llm import LLMResult, ReplayMiss, get_llm, parse_json
+from support_agent.mcp_server.kb import article_versions  # the help-center files the MCP server reads
 from support_agent.routing import choose_route
 from support_agent.schemas import Draft, Triage
 from support_agent.tools import ToolCallError, gateway
@@ -34,8 +35,7 @@ SENSITIVE_PATTERNS = [
     r"hacked", r"unauthori[sz]ed (access|login)", r"legal action", r"lawyer", r"gdpr request",
 ]
 PLACEHOLDER = re.compile(r"(<[a-z_ ]+>|\{\{[^}]+\}\}|\[(name|customer name|your name|company)\])", re.I)
-HOLDING_REPLY = ("Thank you for contacting Fluxo support. Your request has been passed to a specialist on our team, "
-                 "who will get back to you shortly. Your ticket reference is {ticket}.")
+HOLDING_REPLY = prompts.HOLDING_REPLY
 FALLBACK_TRIAGE = {"queue": "Customer Service", "priority": "medium", "type": "Problem"}
 
 
@@ -53,15 +53,30 @@ def ticket_text(state: dict) -> str:
     return f"{state.get('subject', '')}\n\n{state.get('body', '')}".strip()
 
 
+def screen(text: str) -> dict:
+    """Rule-based flags, computed before the cache so a risky ticket can never be answered from it."""
+    low = text.lower()
+    return {"injection_suspected": any(re.search(p, low) for p in INJECTION_PATTERNS),
+            "sensitive": any(re.search(p, low) for p in SENSITIVE_PATTERNS)}
+
+
 # ---- 1. semantic cache -----------------------------------------------------------------------------------------
 def cache_lookup(state: dict) -> dict:
     start = time.perf_counter()
+    flags = screen(ticket_text(state))
     if not settings().cache_enabled:
-        return {"cache_hit": False, "metrics": [_row("cache_lookup", start, cache_hit=False)]}
-    hit = shared_cache().lookup(ticket_text(state))
+        return {"cache_hit": False, **flags, "metrics": [_row("cache_lookup", start, cache_hit=False)]}
+    if flags["injection_suspected"] or flags["sensitive"]:
+        # A paraphrase of a cached generic question plus "refund" or an injected instruction must take the full path.
+        return {"cache_hit": False, **flags,
+                "metrics": [_row("cache_lookup", start, cache_hit=False, skipped="risky_ticket")]}
+    cache = shared_cache()
+    dropped = cache.invalidate_stale(article_versions())     # answers built on an article that changed since
+    hit = cache.lookup(ticket_text(state))
     if not hit:
-        return {"cache_hit": False, "metrics": [_row("cache_lookup", start, cache_hit=False)]}
-    return {"cache_hit": True, "cache_similarity": round(hit.similarity, 4), "answer": hit.entry.answer,
+        return {"cache_hit": False, **flags,
+                "metrics": [_row("cache_lookup", start, cache_hit=False, invalidated=dropped)]}
+    return {"cache_hit": True, **flags, "cache_similarity": round(hit.similarity, 4), "answer": hit.entry.answer,
             "triage": {**hit.entry.triage, "confidence": 1.0, "valid": True},
             "draft": {"answer": hit.entry.answer, "cited_articles": hit.entry.cited_articles, "needs_human": False},
             "model_used": "cache", "status": "answered", "route": "cache",
@@ -79,10 +94,7 @@ def retrieve(state: dict, config=None) -> dict:
     account = None
     if state.get("customer_email"):
         account = gw.try_call("get_account", {"email": state["customer_email"]}, thread)
-    low = ticket_text(state).lower()
-    injection = any(re.search(p, low) for p in INJECTION_PATTERNS)
-    sensitive = any(re.search(p, low) for p in SENSITIVE_PATTERNS)
-    return {"articles": articles, "account": account, "injection_suspected": injection, "sensitive": sensitive,
+    return {"articles": articles, "account": account, **screen(ticket_text(state)),
             "metrics": [_row("retrieve", start, n_articles=len(articles), account_found=account is not None)]}
 
 
@@ -105,6 +117,8 @@ def triage(state: dict) -> dict:
     for i in range(n):
         try:
             r = llm.chat(messages, temperature=0.0 if i == 0 else 0.7, sample=i, max_tokens=700)
+        except ReplayMiss:        # a missing recording is a harness error, not a model outage: fail the item
+            raise
         except Exception as err:  # the small model is down: everything goes to the large model
             return {"triage": {**FALLBACK_TRIAGE, "in_scope": True, "confidence": 0.0, "valid": False,
                                "error": str(err)[:200]}, "small_answer": "",
@@ -146,6 +160,8 @@ def generate_large(state: dict) -> dict:
     attempts = state.get("attempts_large", 0) + 1
     try:
         r = get_llm("large").chat(messages, temperature=0.0, max_tokens=900)
+    except ReplayMiss:
+        raise
     except Exception as err:
         return {"draft": {"answer": "", "cited_articles": [], "needs_human": True}, "model_used": "large",
                 "attempts_large": attempts,
@@ -239,8 +255,11 @@ def escalate(state: dict, config=None) -> dict:
             answer = ""
     if not answer:
         answer = HOLDING_REPLY.format(ticket=record.get("ticket_id", "pending"))
-    return {"answer": answer, "status": "escalated", "escalation": record,
-            "metrics": [_row("escalate", start, reason=reason, ticket_id=record.get("ticket_id"))]}
+    # "escalated" only when a human team really has the ticket; a failed MCP write must not count as an escalation.
+    status = "escalated" if record.get("escalation_id") else "escalation_failed"
+    return {"answer": answer, "status": status, "escalation": record,
+            "metrics": [_row("escalate", start, reason=reason, ticket_id=record.get("ticket_id"),
+                             escalation_failed=status == "escalation_failed")]}
 
 
 # ---- 7. cache write + finalize ------------------------------------------------------------------------------------
@@ -259,9 +278,15 @@ def cache_write(state: dict) -> dict:
     stored = False
     if is_cacheable(state) and answer:
         tri = state["triage"]
+        cited = state.get("draft", {}).get("cited_articles", [])
+        # The answer may rest on every article the model saw, cited or not (the small model never cites):
+        # remember all their versions so an edit to any of them drops this entry.
+        current = article_versions()
+        used = set(cited) | {a["id"] for a in state.get("articles") or []}
         shared_cache().add(CacheEntry(text=ticket_text(state), answer=answer,
                                       triage={k: tri[k] for k in ("queue", "priority", "type")},
-                                      cited_articles=state.get("draft", {}).get("cited_articles", [])))
+                                      cited_articles=cited,
+                                      article_versions={aid: current.get(aid, "missing") for aid in sorted(used)}))
         stored = True
     return {"answer": answer, "status": "answered", "metrics": [_row("cache_write", start, stored=stored)]}
 

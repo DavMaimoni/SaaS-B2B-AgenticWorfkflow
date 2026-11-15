@@ -134,9 +134,12 @@ class LLM:
             kwargs["seed"] = sample
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
+        from openai import BadRequestError, UnprocessableEntityError
         try:
             response = self._client.chat.completions.create(**kwargs)
-        except Exception as err:  # some providers reject response_format or seed: retry once without them
+        except (BadRequestError, UnprocessableEntityError) as err:
+            # Some providers reject response_format or seed: retry once without them. Only on a 400/422: a 429 or a
+            # timeout was already retried by the client (max_retries) and must not cost one more call.
             if not json_mode and not sample:
                 raise
             kwargs.pop("response_format", None)

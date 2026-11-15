@@ -41,3 +41,56 @@ def test_summary_and_blocking_checks():
     bad = summarize([row(1, "critical", escalated=False)])
     assert any("escalation_recall_critical" in f for f in check(bad, None, thresholds))
     assert any("judge_score" in f for f in check({**s, "judge_score": 0.9}, {"judge_score": 1.0}, thresholds))
+
+
+def test_failed_escalations_and_judge_errors_are_counted():
+    rows = [row(1, "critical", status="escalation_failed", escalation_failed=True),
+            row(2, "routine", verdict=None, judge_error="judge: request not recorded")]
+    s = summarize(rows)
+    assert s["escalation_recall_critical"] == 0.0 and s["escalation_failure_rate"] == 0.5
+    assert s["error_rate"] == 0.5
+    assert any("escalation_failure_rate" in f
+               for f in check(s, None, {"absolute": {"escalation_failure_rate": {"max": 0.0}}}))
+
+
+def test_lower_is_better_rates_are_checked_against_a_zero_baseline():
+    thresholds = {"relative": {"tolerance": 0.05, "lower_is_better": ["escalation_rate_routine"]}}
+    baseline = {"escalation_rate_routine": 0.0}
+    assert check({"escalation_rate_routine": 0.04}, baseline, thresholds) == []
+    assert check({"escalation_rate_routine": 0.2}, baseline, thresholds) != []
+
+
+def test_judge_replay_miss_is_an_error_not_a_no(monkeypatch):
+    import eval.judge as judge
+    from support_agent.llm import ReplayMiss
+
+    class Unrecorded:
+        def chat_json(self, *a, **k):
+            raise ReplayMiss("judge: request not recorded")
+    monkeypatch.setattr(judge, "get_llm", lambda name: Unrecorded())
+    out = judge.judge_row({**row(1, "routine"), "subject": "s", "body": "b", "reference_answer": "r"})
+    assert out["verdict"] is None and "not recorded" in out["judge_error"]
+
+
+def test_check_fails_when_the_baseline_file_is_missing(tmp_path, monkeypatch):
+    import sys
+
+    import eval.summary as summary
+    (tmp_path / "summary.json").write_text('{"n": 1}')
+    (tmp_path / "thresholds.json").write_text("{}")
+    monkeypatch.setattr(sys, "argv", ["summary.py", "check", str(tmp_path), "--baseline", str(tmp_path / "nope.json"),
+                                      "--thresholds", str(tmp_path / "thresholds.json")])
+    with pytest.raises(SystemExit) as exit_info:
+        summary.main()
+    assert exit_info.value.code == 1
+
+
+def test_holding_reply_after_escalation_is_not_judged():
+    import eval.judge as judge
+    from support_agent.prompts import HOLDING_REPLY
+    r = {**row(1, "critical", escalated=True, status="escalated"), "subject": "s", "body": "b",
+         "reference_answer": "r", "answer": HOLDING_REPLY.format(ticket="TCK-00001")}
+    out = judge.judge_row(r)
+    assert out["verdict"] is None and out["judge_skipped"] == "holding_reply"
+    s = summarize([{**r, **out}, row(2, "routine")])
+    assert s["judge_skipped_holding"] == 1 and s["judge_score"] == 1.0          # only the routine reply is graded

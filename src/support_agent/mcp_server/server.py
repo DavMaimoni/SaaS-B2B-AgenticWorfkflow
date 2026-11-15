@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import sys
+from contextlib import contextmanager
 from typing import Annotated, Literal
 
 from mcp.server.mcpserver import MCPServer
@@ -42,22 +44,32 @@ def tool_error(code: str, message: str, retryable: bool = False, outcome_unknown
                                  "retryable": retryable, "outcome_unknown": outcome_unknown}))
 
 
+@contextmanager
+def crm_errors():
+    """A locked or busy SQLite file is transient: tell the harness it may retry. Writes run in a transaction that is
+    rolled back on error, so their outcome is known (nothing was written)."""
+    try:
+        yield
+    except sqlite3.OperationalError as err:
+        raise tool_error("unavailable", f"The CRM is temporarily unavailable ({err}). Retry later.", retryable=True)
+
+
 def build_server(crm: CRM | None = None) -> MCPServer:
-    """A server bound to one CRM (tests pass an in-memory CRM; the default is data/crm.sqlite)."""
+    """A server bound to one CRM (tests pass an in-memory CRM; the default is data/crm.sqlite).
+    The help center is read through `knowledge_base()` on every call, so an edited article is picked up."""
     crm = crm or CRM(os.getenv("CRM_PATH", CRM_PATH))
-    kb = knowledge_base()
     mcp = MCPServer("fluxo-support", instructions="Fluxo customer support tools: help center, CRM and tickets.")
 
     @mcp.tool(annotations=READ)
     def search_kb(query: Query, top_k: Annotated[int, Field(ge=1, le=5)] = 3) -> list[dict]:
         """Search the Fluxo help center. Returns up to top_k articles (id, title, text, score), best first.
         Returns [] when nothing is relevant: then do not invent an answer."""
-        return kb.search(query, top_k=top_k)
+        return knowledge_base().search(query, top_k=top_k)
 
     @mcp.tool(annotations=READ)
     def get_article(article_id: ArticleId) -> dict:
         """Full text of one help-center article."""
-        article = kb.get(article_id)
+        article = knowledge_base().get(article_id)
         if not article:
             raise tool_error("not_found", f"No article {article_id}. Use search_kb to find ids.")
         return article.as_dict()
@@ -65,7 +77,8 @@ def build_server(crm: CRM | None = None) -> MCPServer:
     @mcp.tool(annotations=READ)
     def get_account(email: Email) -> dict:
         """The customer's account: plan, billing cycle, seats, status (active | read_only), renewal date, region."""
-        account = crm.get_account(email)
+        with crm_errors():
+            account = crm.get_account(email)
         if not account:
             raise tool_error("not_found", f"No account for {email}. Ask the customer for their account email.")
         return account
@@ -73,7 +86,8 @@ def build_server(crm: CRM | None = None) -> MCPServer:
     @mcp.tool(annotations=READ)
     def list_invoices(account_id: AccountId) -> list[dict]:
         """The account's last invoices, newest first (id, issued_on, amount_usd, status paid | failed)."""
-        return crm.list_invoices(account_id)
+        with crm_errors():
+            return crm.list_invoices(account_id)
 
     @mcp.tool(annotations=WRITE)
     def create_ticket(subject: Annotated[str, Field(min_length=1, max_length=300)],
@@ -83,7 +97,8 @@ def build_server(crm: CRM | None = None) -> MCPServer:
         """Open a ticket for the level-2 team. Repeating the exact same call is safe: it never creates two tickets."""
         if not idempotency_key:
             raise tool_error("missing_key", "create_ticket needs an idempotency_key (set by the harness).")
-        return crm.create_ticket(subject, summary, queue, priority, account_email, idempotency_key)
+        with crm_errors():
+            return crm.create_ticket(subject, summary, queue, priority, account_email, idempotency_key)
 
     @mcp.tool(annotations=WRITE)
     def escalate_to_human(ticket_id: TicketId, reason: Annotated[str, Field(min_length=3, max_length=1000)],
@@ -93,19 +108,20 @@ def build_server(crm: CRM | None = None) -> MCPServer:
         if not idempotency_key:
             raise tool_error("missing_key", "escalate_to_human needs an idempotency_key (set by the harness).")
         try:
-            return crm.escalate(ticket_id, reason, queue, idempotency_key)
+            with crm_errors():
+                return crm.escalate(ticket_id, reason, queue, idempotency_key)
         except KeyError as e:
             raise tool_error("not_found", str(e))
 
     @mcp.resource("kb://articles")
     def list_articles() -> str:
         """Index of the help center: one line per article."""
-        return "\n".join(f"{a.id}: {a.title}" for a in kb.articles)
+        return "\n".join(f"{a.id}: {a.title}" for a in knowledge_base().articles)
 
     @mcp.resource("kb://article/{article_id}")
     def article_resource(article_id: str) -> str:
         """One help-center article as markdown."""
-        a = kb.get(article_id)
+        a = knowledge_base().get(article_id)
         return f"# {a.title}\n\n{a.text}" if a else f"No article {article_id}"
 
     @mcp.prompt()
