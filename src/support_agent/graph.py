@@ -21,7 +21,7 @@ def should_continue(state: SupportAgentState) -> str:
     
     return "end"
 
-def build_graph():
+def build_graph(checkpointer=None):
     """Builds and compiles the StateGraph. Required by the evaluation pipeline."""
     builder = StateGraph(SupportAgentState)
 
@@ -44,7 +44,8 @@ def build_graph():
     builder.add_edge("tools", "agent")
     builder.add_edge("human_escalation", END)
 
-    memory = MemorySaver()
+    # Use the provided checkpointer if given, otherwise fall back to MemorySaver
+    memory = checkpointer if checkpointer is not None else MemorySaver()
     return builder.compile(
         checkpointer=memory,
         interrupt_before=["human_escalation"] 
