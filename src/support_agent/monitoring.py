@@ -3,17 +3,11 @@ from datetime import datetime
 from typing import Dict, Any
 
 class TokenUsageMonitor:
-    """
-    Tracks LLM token usage and associates operational costs with specific B2B tenants.
-    """
+    """Tracks LLM token usage and associates operational costs with specific B2B tenants."""
     def __init__(self, log_file: str = "monitoring/usage_logs.jsonl"):
         self.log_file = log_file
 
     def log_usage(self, tenant_id: str, usage_metadata: Dict[str, Any]) -> None:
-        """
-        Logs the token usage to a file or monitoring database.
-        This data feeds into dashboard.py to calculate unit economics per client.
-        """
         if not usage_metadata:
             return
 
