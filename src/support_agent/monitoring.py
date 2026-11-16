@@ -12,7 +12,7 @@ class TokenUsageMonitor:
             return
 
         log_entry = {
-            # Fixed deprecation warning by using timezone-aware UTC datetime
+            # Using the modern timezone-aware method
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "tenant_id": tenant_id,
             "input_tokens": usage_metadata.get("input_tokens", 0),
