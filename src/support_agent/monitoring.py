@@ -30,7 +30,11 @@ class MockRecord(dict):
     """A mock record dict that supports subscriptable access for eval/run_eval.py."""
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # Initialization of all keys expected by eval/run_eval.py
         self.setdefault("latency_ms", 0.0)
+        self.setdefault("cost_usd", 0.0)
+        self.setdefault("tokens_in", 0)
+        self.setdefault("tokens_out", 0)
         self.setdefault("input_tokens", 0)
         self.setdefault("output_tokens", 0)
         self.setdefault("total_tokens", 0)
