@@ -5,7 +5,7 @@ from src.support_agent.llm import get_llm
 
 tools = [get_crm_ticket, update_crm_ticket]
 # Fix : passed the missing 'name' positional argument
-llm_with_tools = get_llm(name="agent").bind_tools(tools)
+llm_with_tools = get_llm(name="small").bind_tools(tools)
 
 def agent_node(state: SupportAgentState) -> dict:
     """Core reasoning node. Invokes the LLM to decide on the next action."""
