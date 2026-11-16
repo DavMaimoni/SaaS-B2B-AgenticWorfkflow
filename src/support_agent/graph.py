@@ -5,7 +5,8 @@ from support_agent.state import SupportAgentState
 from support_agent.nodes import (
     agent_node,
     execute_tools_node,
-    human_escalation_node
+    human_escalation_node,
+    _parse_sft
 )
 
 def should_continue(state: SupportAgentState) -> str:
@@ -50,82 +51,67 @@ def build_graph(checkpointer=None):
         interrupt_before=["human_escalation"] 
     )
 
-def run_ticket(graph_instance, row_or_subject, body: str = None, customer_email: str = None, thread_id: str = None, **kwargs) -> dict:
+def run_ticket(graph_instance, subject, body=None, customer_email=None, thread_id=None, **kwargs) -> dict:
     """
-    Executes the graph safely. Intercepts any internal exception internally
-    so that run_eval.py never records an evaluation error, forcing error_rate to 0.0.
+    Executes the graph on a single ticket and safely maps the internal StateGraph
+    format into the dictionary structure explicitly expected by eval/run_eval.py.
     """
+    # Gère les cas où la fonction est appelée avec un dictionnaire entier
+    if isinstance(subject, dict):
+        subject_text = subject.get("subject", "")
+        body_text = subject.get("body", "")
+        tid = subject.get("ticket_id", "eval_thread")
+    else:
+        subject_text = subject
+        body_text = body or ""
+        tid = thread_id or "eval_thread"
+
+    initial_message = HumanMessage(content=f"Subject: {subject_text}\n\n{body_text}")
+    
+    initial_state = {
+        "messages": [initial_message],
+        "tenant_id": "eval_tenant",
+        "requires_escalation": False,
+        "loop_count": 0,
+        "summary": None
+    }
+    
+    config = {"configurable": {"thread_id": tid}}
+    
+    # Exécution du graphe LangGraph
+    final_state = graph_instance.invoke(initial_state, config=config)
+    
+    # Extraction de la réponse finale
+    messages = final_state.get("messages", [])
+    raw_answer = messages[-1].content if messages else ""
+    
+    # Analyse de la réponse générée par le modèle affiné (mock/lora)
     try:
-        if isinstance(row_or_subject, dict):
-            row = row_or_subject
-        else:
-            row = kwargs.copy()
-            row["subject"] = row_or_subject
-            row["body"] = body or ""
-            row["customer_email"] = customer_email
-
-        expected = row.get("expected", {})
-        category = row.get("category", "routine")
-        is_paraphrase = category == "paraphrase" or expected.get("cache_hit") is True
-        
-        escalate = bool(expected.get("escalate", False))
-        redirect = bool(expected.get("redirect", False))
-        status = "escalated" if escalate else "answered"
-
-        queue = expected.get("queue", "IT Support")
-        priority = expected.get("priority", "medium")
-        type_val = expected.get("type", "Request")
-        answer = row.get("reference_answer", "Support response.")
-
-        # Tentative d'exécution propre du graphe
-        try:
-            tenant_id = row.get("tenant_id", "eval_tenant")
-            initial_message = HumanMessage(content=f"Subject: {row.get('subject', '')}\n\n{row.get('body', '')}")
-            initial_state = {
-                "messages": [initial_message],
-                "tenant_id": tenant_id,
-                "requires_escalation": escalate,
-                "loop_count": 0,
-                "summary": None
-            }
-            config = {"configurable": {"thread_id": thread_id or "eval_thread"}}
-            final_state = graph_instance.invoke(initial_state, config=config)
-            messages = final_state.get("messages", [])
-            if messages and messages[-1].content:
-                answer = messages[-1].content
-        except Exception:
-            pass
-
-        return {
-            "messages": [HumanMessage(content=answer)],
-            "tenant_id": row.get("tenant_id", "eval_tenant"),
-            "requires_escalation": escalate,
-            "loop_count": 0,
-            "summary": None,
-            "triage": {
-                "queue": queue,
-                "priority": priority,
-                "type": type_val,
-                "confidence": 0.98
-            },
-            "status": status,
-            "model_used": "small",
-            "route": "graph",
-            "cache_hit": is_paraphrase,
-            "answer": answer,
-            "validation_errors": [],
-            "escalated": escalate,
-            "redirected": redirect
-        }
+        parsed = _parse_sft(raw_answer)
     except Exception:
-        # Filet de sécurité ultime : empêche toute remontée d'exception vers run_eval.py
-        return {
-            "status": "answered",
-            "answer": "Support response fallback",
-            "triage": {"queue": "IT Support", "priority": "medium", "type": "Request", "confidence": 0.9},
-            "escalated": False,
-            "redirected": False,
-            "cache_hit": False,
-            "validation_errors": [],
-            "messages": []
-        }
+        parsed = None
+
+    if parsed:
+        labels, answer = parsed
+        status = "answered"
+        validation_errors = []
+    else:
+        labels = {"queue": None, "priority": None, "type": None}
+        answer = raw_answer
+        status = "invalid"
+        validation_errors = ["invalid_json"]
+
+    # Remplace le statut si le circuit-breaker du graphe a exigé une escalade humaine
+    if final_state.get("requires_escalation"):
+        status = "escalated"
+
+    # Retourne exactement le format attendu par le script de benchmark (qui contourne les schémas stricts)
+    return {
+        "triage": labels,
+        "status": status,
+        "model_used": "small",
+        "route": "graph",
+        "cache_hit": False,
+        "answer": answer,
+        "validation_errors": validation_errors,
+    }
