@@ -38,6 +38,8 @@ class MockRecord(dict):
         self.setdefault("input_tokens", 0)
         self.setdefault("output_tokens", 0)
         self.setdefault("total_tokens", 0)
+        self.setdefault("llm_calls", 0)
+        self.setdefault("nodes", [])
 
     def add(self, *args, **kwargs):
         pass
