@@ -1,10 +1,7 @@
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 def get_agent_prompt() -> ChatPromptTemplate:
-    """
-    Builds the system prompt with strict B2B isolation context.
-    The tenant_id will be injected at runtime from the LangGraph State.
-    """
+    """Builds the system prompt with strict B2B isolation context."""
     system_message = """You are an advanced B2B SaaS technical support agent.
     You are currently assisting a user from tenant: {tenant_id}.
     
@@ -19,3 +16,9 @@ def get_agent_prompt() -> ChatPromptTemplate:
         ("system", system_message),
         MessagesPlaceholder(variable_name="messages"),
     ])
+
+# Backward compatibility for finetune/build_sft.py and associated tests
+sft_messages = [
+    ("system", "You are a B2B SaaS support agent."),
+    ("human", "{question}")
+]
