@@ -1,43 +1,89 @@
-from pydantic import BaseModel, Field
-from langchain_core.tools import tool
-from typing import Any
+from langgraph.graph import StateGraph, END
+from langgraph.checkpoint.memory import MemorySaver
+from langchain_core.messages import HumanMessage
+from support_agent.state import SupportAgentState
+from support_agent.nodes import (
+    agent_node,
+    execute_tools_node,
+    human_escalation_node
+)
 
-# --- Legacy / Evaluation Compatibility Stubs ---
-# These allow eval/run_eval.py to inject a fresh in-memory CRM for each test run
-# to prevent data leakage between evaluation triples.
+def should_continue(state: SupportAgentState) -> str:
+    """Routing logic based on the agent's output and circuit breaker status."""
+    if state.get("requires_escalation"):
+        return "escalate"
+    
+    messages = state.get("messages", [])
+    last_message = messages[-1] if messages else None
+    
+    if last_message and hasattr(last_message, "tool_calls") and last_message.tool_calls:
+        return "continue"
+    
+    return "end"
 
-class ToolGateway:
-    """Gateway to access external systems like the CRM. Required for the eval pipeline."""
-    def __init__(self, crm: Any = None):
-        self.crm = crm
+def build_graph():
+    """Builds and compiles the StateGraph. Required by the evaluation pipeline."""
+    builder = StateGraph(SupportAgentState)
 
-_gateway = None
+    builder.add_node("agent", agent_node)
+    builder.add_node("tools", execute_tools_node)
+    builder.add_node("human_escalation", human_escalation_node)
 
-def set_gateway(gateway: ToolGateway) -> None:
-    """Sets the global tool gateway. Used by eval/run_eval.py to inject isolated CRMs."""
-    global _gateway
-    _gateway = gateway
+    builder.set_entry_point("agent")
 
-# --- B2B Support Tools ---
+    builder.add_conditional_edges(
+        "agent",
+        should_continue,
+        {
+            "continue": "tools",
+            "escalate": "human_escalation",
+            "end": END
+        }
+    )
 
-class GetTicketSchema(BaseModel):
-    tenant_id: str = Field(description="Client company ID (mandatory for data isolation).")
-    ticket_id: str = Field(description="Unique identifier of the CRM ticket.")
+    builder.add_edge("tools", "agent")
+    builder.add_edge("human_escalation", END)
 
-class UpdateTicketSchema(BaseModel):
-    tenant_id: str = Field(description="Client company ID (mandatory for data isolation).")
-    ticket_id: str = Field(description="Unique identifier of the CRM ticket.")
-    new_status: str = Field(description="New status to apply (e.g., 'resolved', 'escalated').")
-    resolution_summary: str = Field(description="Technical summary of the AI agent's intervention.")
+    memory = MemorySaver()
+    return builder.compile(
+        checkpointer=memory,
+        interrupt_before=["human_escalation"] 
+    )
 
-@tool(args_schema=GetTicketSchema)
-def get_crm_ticket(tenant_id: str, ticket_id: str) -> str:
-    """Retrieves the details and history of a specific support ticket."""
-    # In a full implementation, this would use _gateway.crm to fetch real data
-    return f"Mock Ticket Data for {ticket_id} (Tenant: {tenant_id}): Customer reported issues."
+# Global instance for normal app usage (API, CLI, etc.)
+graph = build_graph()
 
-@tool(args_schema=UpdateTicketSchema)
-def update_crm_ticket(tenant_id: str, ticket_id: str, new_status: str, resolution_summary: str) -> str:
-    """Updates the status and adds a resolution summary to a ticket in the CRM."""
-    # In a full implementation, this would use _gateway.crm to write real data
-    return f"Success: Ticket {ticket_id} has been updated to '{new_status}' for tenant {tenant_id}."
+def run_ticket(graph_instance, row: dict) -> dict:
+    """
+    Helper function for the evaluation pipeline.
+    Executes the graph on a single mocked ticket and extracts the result.
+    """
+    subject = row.get("subject", "")
+    body = row.get("body", "")
+    
+    # Use a default tenant_id for evaluation mocks if not provided
+    tenant_id = row.get("tenant_id", "eval_tenant")
+    
+    initial_message = HumanMessage(content=f"Subject: {subject}\n\n{body}")
+    
+    initial_state = {
+        "messages": [initial_message],
+        "tenant_id": tenant_id,
+        "requires_escalation": False,
+        "loop_count": 0,
+        "summary": None
+    }
+    
+    # Required for MemorySaver checkpointer
+    config = {"configurable": {"thread_id": row.get("ticket_id", "eval_thread")}}
+    
+    final_state = graph_instance.invoke(initial_state, config=config)
+    
+    # Extract the agent's final answer from the messages
+    messages = final_state.get("messages", [])
+    answer = messages[-1].content if messages else ""
+    
+    return {
+        "answer": answer,
+        "escalated": final_state.get("requires_escalation", False)
+    }
