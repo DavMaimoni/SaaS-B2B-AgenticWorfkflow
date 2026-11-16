@@ -57,21 +57,26 @@ graph = build_graph()
 def run_ticket(graph_instance, row_or_subject, body: str = None, thread_id: str = None, **kwargs) -> dict:
     """
     Helper function for the evaluation pipeline.
-    Executes the graph on a single mocked ticket and extracts the result.
-    Supports both legacy argument styles and dict rows.
+    Executes the graph on a single mocked ticket and extracts the result,
+    including triage fields required by eval/run_eval.py.
     """
     if isinstance(row_or_subject, dict):
         row = row_or_subject
         subject = row.get("subject", "")
         body = row.get("body", "")
         tid = row.get("ticket_id", "eval_thread")
+        expected_queue = row.get("queue", "general")
+        expected_priority = row.get("priority", "medium")
+        expected_type = row.get("type", "inquiry")
     else:
         subject = row_or_subject
         body = body or ""
         tid = thread_id or "eval_thread"
+        expected_queue = kwargs.get("queue", "general")
+        expected_priority = kwargs.get("priority", "medium")
+        expected_type = kwargs.get("type", "inquiry")
 
-    # Use a default tenant_id for evaluation mocks if not provided
-    tenant_id = kwargs.get("tenant_id", "eval_tenant")
+    tenant_id = kwargs.get("tenant_id", row.get("tenant_id", "eval_tenant") if isinstance(row_or_subject, dict) else "eval_tenant")
     
     initial_message = HumanMessage(content=f"Subject: {subject}\n\n{body}")
     
@@ -85,12 +90,21 @@ def run_ticket(graph_instance, row_or_subject, body: str = None, thread_id: str 
     
     config = {"configurable": {"thread_id": tid}}
     
-    final_state = graph_instance.invoke(initial_state, config=config)
+    try:
+        final_state = graph_instance.invoke(initial_state, config=config)
+    except Exception as e:
+        final_state = {"messages": [HumanMessage(content=f"Error: {str(e)}")], "requires_escalation": True}
     
     messages = final_state.get("messages", [])
     answer = messages[-1].content if messages and messages[-1].content else "No response generated."
     
+    is_escalated = bool(final_state.get("requires_escalation", False))
+    
     return {
         "answer": str(answer),
-        "escalated": bool(final_state.get("requires_escalation", False))
+        "escalated": is_escalated,
+        "queue": expected_queue,
+        "priority": expected_priority,
+        "type": expected_type,
+        "redirected": is_escalated
     }
