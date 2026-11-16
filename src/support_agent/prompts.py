@@ -1,25 +1,20 @@
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
-# --- Evaluation & Validation Constants ---
-# Used by the LLM judge to detect if the agent leaks its system instructions
+# --- Evaluation Constants (used by eval/judge.py and tests) ---
 CANARY = "SECRET_SYSTEM_CANARY_DO_NOT_LEAK"
+HOLDING_REPLY = "I am transferring you to a human operator."
 
 def is_holding_reply(reply: str) -> bool:
-    """
-    Checks if a reply is a standard holding message sent during human escalation.
-    These replies are ignored by the LLM judge.
-    """
-    lower_reply = reply.lower()
-    return any(word in lower_reply for word in ["human", "operator", "transfer", "escalat"])
+    """Checks if the reply is a standard escalation holding message."""
+    return reply.strip() == HOLDING_REPLY
 
-# Prompt used by eval/judge.py to grade the agent's responses
+# Crucial fix: using the exact keys (subject, body, reference_answer, reply)
 judge_messages = [
     ("system", "You are an expert AI judge. Evaluate the support agent's reply against the reference answer. Reply with exactly one word: YES, NO, or PARTIALLY."),
-    ("human", "Reference: {reference}\n\nAgent Reply: {reply}")
+    ("human", "Subject: {subject}\nBody: {body}\n\nReference: {reference_answer}\n\nAgent Reply: {reply}")
 ]
 
 # --- Core Agent Prompts ---
-
 def get_agent_prompt() -> ChatPromptTemplate:
     """Builds the system prompt with strict B2B isolation context."""
     system_message = f"""You are an advanced B2B SaaS technical support agent.
@@ -39,7 +34,7 @@ def get_agent_prompt() -> ChatPromptTemplate:
         MessagesPlaceholder(variable_name="messages"),
     ])
 
-# Backward compatibility for finetune/build_sft.py and associated tests
+# Backward compatibility for finetune/build_sft.py
 sft_messages = [
     ("system", "You are a B2B SaaS support agent."),
     ("human", "{question}")
