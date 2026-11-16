@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any
 
 class TokenUsageMonitor:
@@ -12,7 +12,8 @@ class TokenUsageMonitor:
             return
 
         log_entry = {
-            "timestamp": datetime.utcnow().isoformat(),
+            # Fixed deprecation warning by using timezone-aware UTC datetime
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "tenant_id": tenant_id,
             "input_tokens": usage_metadata.get("input_tokens", 0),
             "output_tokens": usage_metadata.get("output_tokens", 0),
