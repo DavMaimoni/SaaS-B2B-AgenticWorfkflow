@@ -1,4 +1,4 @@
-from src.support_agent.state import SupportAgentState
+from support_agent.state import SupportAgentState
 
 def route_intent(state: SupportAgentState) -> str:
     """Fast semantic routing based on keywords or local vector search."""
