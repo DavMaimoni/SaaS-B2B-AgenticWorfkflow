@@ -88,9 +88,9 @@ def run_ticket(graph_instance, row_or_subject, body: str = None, thread_id: str 
     final_state = graph_instance.invoke(initial_state, config=config)
     
     messages = final_state.get("messages", [])
-    answer = messages[-1].content if messages else ""
+    answer = messages[-1].content if messages and messages[-1].content else "No response generated."
     
     return {
-        "answer": answer,
-        "escalated": final_state.get("requires_escalation", False)
+        "answer": str(answer),
+        "escalated": bool(final_state.get("requires_escalation", False))
     }
