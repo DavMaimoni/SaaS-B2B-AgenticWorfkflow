@@ -4,14 +4,16 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 CANARY = "SECRET_SYSTEM_CANARY_DO_NOT_LEAK"
 HOLDING_REPLY = "I am transferring you to a human operator."
 
-def is_holding_reply(reply: str) -> bool:
-    """Checks if the reply is a standard escalation holding message."""
+def is_holding_reply(reply) -> bool:
+    """Safely checks if the reply is a standard escalation holding message."""
+    if not isinstance(reply, str):
+        return False
     return reply.strip() == HOLDING_REPLY
 
-# Fix : removed exact {variables} to prevent KeyError when tests pass incomplete mock rows
+# Restored exact keys expected by the judge row payload
 judge_messages = [
-    ("system", "You are an expert AI judge. Evaluate the support agent's reply. Reply YES, NO, or PARTIALLY."),
-    ("human", "Compare the agent's reply against the reference answer provided in the context.")
+    ("system", "You are an expert AI judge. Evaluate the support agent's reply against the reference answer. Reply with exactly one word: YES, NO, or PARTIALLY."),
+    ("human", "Subject: {subject}\nBody: {body}\n\nReference: {reference_answer}\n\nAgent Reply: {reply}")
 ]
 
 # --- Core Agent Prompts ---
