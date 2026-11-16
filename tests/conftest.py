@@ -1,12 +1,15 @@
-"""Every test runs offline: mock models, in-memory CRM, temporary runs/ folder, fresh singletons."""
-
 import pytest
-
+from pathlib import Path
 
 @pytest.fixture(autouse=True)
 def offline(monkeypatch, tmp_path):
+    """
+    Configures the global test environment.
+    Mocks environment variables and prevents actual API calls.
+    """
     for name in ("SMALL", "LARGE", "JUDGE"):
         monkeypatch.setenv(f"{name}_PROVIDER", "mock")
+    
     monkeypatch.setenv("LLM_MODE", "live")
     monkeypatch.setenv("EMBEDDER", "hashing")
     monkeypatch.setenv("CACHE_ENABLED", "1")
@@ -15,12 +18,8 @@ def offline(monkeypatch, tmp_path):
     monkeypatch.setenv("RUNS_DIR", str(tmp_path / "runs"))
     monkeypatch.setenv("CRM_PATH", ":memory:")
 
-    from support_agent import cache, llm, tools
-    from support_agent.mcp_server.crm import CRM
-    llm.reset_clients()
-    cache.reset_shared_cache()
-    tools.set_gateway(tools.ToolGateway(CRM(":memory:")))
-    yield
-    tools.set_gateway(None)
-    cache.reset_shared_cache()
+    # Import at runtime to ensure env vars are applied
+    from support_agent import llm
+    
+    # Reset only the LLM clients (shared cache no longer exists in B2B)
     llm.reset_clients()
