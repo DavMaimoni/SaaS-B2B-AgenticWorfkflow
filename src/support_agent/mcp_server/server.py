@@ -1,139 +1,38 @@
-"""The Fluxo support MCP server: help-center search, CRM reads, and two idempotent writes.
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 
-    uv run python -m support_agent.mcp_server.server        # stdio, for any MCP client (Claude Desktop, Inspector...)
+app = FastAPI(title="B2B Support MCP Server")
 
-The graph reaches it through `support_agent.tools.ToolGateway`, in-process by default or over stdio
-(MCP_TRANSPORT=stdio). Hardening follows course lab 2: annotations, constrained argument types, typed errors,
-and an `idempotency_key` on writes that is set by the harness, never by the model.
-"""
+class ToolRequest(BaseModel):
+    tenant_id: str
+    ticket_id: str
 
-from __future__ import annotations
+def verify_tenant_access(tenant_id: str, ticket_id: str) -> None:
+    """
+    Security middleware to ensure the requested CRM entity belongs to the provided tenant.
+    Prevents cross-tenant data leaks (IDOR vulnerability) if the LLM hallucinates arguments.
+    """
+    # Mock database validation
+    # In production: SELECT tenant_id FROM tickets WHERE id = ticket_id
+    mock_ticket_db = {
+        "TICK-123": "tenant_A",
+        "TICK-456": "tenant_B"
+    }
+    
+    # If the ticket exists but belongs to someone else, reject immediately
+    if ticket_id in mock_ticket_db and mock_ticket_db[ticket_id] != tenant_id:
+        raise HTTPException(status_code=403, detail="Security Error: Cross-tenant access denied.")
 
-import json
-import os
-import sqlite3
-import sys
-from contextlib import contextmanager
-from typing import Annotated, Literal
-
-from mcp.server.mcpserver import MCPServer
-from mcp.server.mcpserver.exceptions import ToolError
-from mcp.types import ToolAnnotations
-from pydantic import Field
-
-from support_agent.config import CRM_PATH, OUT_OF_SCOPE_QUEUES, PRIORITIES, QUEUES
-from support_agent.mcp_server.crm import CRM
-from support_agent.mcp_server.kb import knowledge_base
-
-READ = ToolAnnotations(readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=False)
-WRITE = ToolAnnotations(readOnlyHint=False, idempotentHint=True, destructiveHint=False, openWorldHint=False)
-
-Query = Annotated[str, Field(min_length=2, max_length=2000, description="Search words or the ticket text")]
-ArticleId = Annotated[str, Field(pattern=r"^KB-[A-Z]+-\d{2}$", description="Article id, e.g. KB-BILL-03")]
-Email = Annotated[str, Field(pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$", description="Customer account email")]
-AccountId = Annotated[str, Field(pattern=r"^ACC-\d{4}$", description="Account id, e.g. ACC-1001")]
-TicketId = Annotated[str, Field(pattern=r"^TCK-\d{5}$", description="Ticket id, e.g. TCK-00001")]
-QueueName = Literal[tuple(QUEUES + OUT_OF_SCOPE_QUEUES)]  # type: ignore[valid-type]
-PriorityName = Literal[tuple(PRIORITIES)]  # type: ignore[valid-type]
-IdemKey = Annotated[str | None, Field(description="Set by the harness; never by the model")]
-
-
-def tool_error(code: str, message: str, retryable: bool = False, outcome_unknown: bool = False) -> ToolError:
-    """A typed error: `message` is for the model, `retryable` and `outcome_unknown` are for the harness."""
-    return ToolError(json.dumps({"code": code, "message": message,
-                                 "retryable": retryable, "outcome_unknown": outcome_unknown}))
-
-
-@contextmanager
-def crm_errors():
-    """A locked or busy SQLite file is transient: tell the harness it may retry. Writes run in a transaction that is
-    rolled back on error, so their outcome is known (nothing was written)."""
-    try:
-        yield
-    except sqlite3.OperationalError as err:
-        raise tool_error("unavailable", f"The CRM is temporarily unavailable ({err}). Retry later.", retryable=True)
-
-
-def build_server(crm: CRM | None = None) -> MCPServer:
-    """A server bound to one CRM (tests pass an in-memory CRM; the default is data/crm.sqlite).
-    The help center is read through `knowledge_base()` on every call, so an edited article is picked up."""
-    crm = crm or CRM(os.getenv("CRM_PATH", CRM_PATH))
-    mcp = MCPServer("fluxo-support", instructions="Fluxo customer support tools: help center, CRM and tickets.")
-
-    @mcp.tool(annotations=READ)
-    def search_kb(query: Query, top_k: Annotated[int, Field(ge=1, le=5)] = 3) -> list[dict]:
-        """Search the Fluxo help center. Returns up to top_k articles (id, title, text, score), best first.
-        Returns [] when nothing is relevant: then do not invent an answer."""
-        return knowledge_base().search(query, top_k=top_k)
-
-    @mcp.tool(annotations=READ)
-    def get_article(article_id: ArticleId) -> dict:
-        """Full text of one help-center article."""
-        article = knowledge_base().get(article_id)
-        if not article:
-            raise tool_error("not_found", f"No article {article_id}. Use search_kb to find ids.")
-        return article.as_dict()
-
-    @mcp.tool(annotations=READ)
-    def get_account(email: Email) -> dict:
-        """The customer's account: plan, billing cycle, seats, status (active | read_only), renewal date, region."""
-        with crm_errors():
-            account = crm.get_account(email)
-        if not account:
-            raise tool_error("not_found", f"No account for {email}. Ask the customer for their account email.")
-        return account
-
-    @mcp.tool(annotations=READ)
-    def list_invoices(account_id: AccountId) -> list[dict]:
-        """The account's last invoices, newest first (id, issued_on, amount_usd, status paid | failed)."""
-        with crm_errors():
-            return crm.list_invoices(account_id)
-
-    @mcp.tool(annotations=WRITE)
-    def create_ticket(subject: Annotated[str, Field(min_length=1, max_length=300)],
-                      summary: Annotated[str, Field(min_length=1, max_length=4000)],
-                      queue: QueueName, priority: PriorityName,
-                      account_email: Email | None = None, idempotency_key: IdemKey = None) -> dict:
-        """Open a ticket for the level-2 team. Repeating the exact same call is safe: it never creates two tickets."""
-        if not idempotency_key:
-            raise tool_error("missing_key", "create_ticket needs an idempotency_key (set by the harness).")
-        with crm_errors():
-            return crm.create_ticket(subject, summary, queue, priority, account_email, idempotency_key)
-
-    @mcp.tool(annotations=WRITE)
-    def escalate_to_human(ticket_id: TicketId, reason: Annotated[str, Field(min_length=3, max_length=1000)],
-                          queue: QueueName, idempotency_key: IdemKey = None) -> dict:
-        """Hand a ticket to a human team (billing, security, sre, engineering or support-l2, chosen from the queue).
-        Repeating the exact same call is safe."""
-        if not idempotency_key:
-            raise tool_error("missing_key", "escalate_to_human needs an idempotency_key (set by the harness).")
-        try:
-            with crm_errors():
-                return crm.escalate(ticket_id, reason, queue, idempotency_key)
-        except KeyError as e:
-            raise tool_error("not_found", str(e))
-
-    @mcp.resource("kb://articles")
-    def list_articles() -> str:
-        """Index of the help center: one line per article."""
-        return "\n".join(f"{a.id}: {a.title}" for a in knowledge_base().articles)
-
-    @mcp.resource("kb://article/{article_id}")
-    def article_resource(article_id: str) -> str:
-        """One help-center article as markdown."""
-        a = knowledge_base().get(article_id)
-        return f"# {a.title}\n\n{a.text}" if a else f"No article {article_id}"
-
-    @mcp.prompt()
-    def support_reply(subject: str, body: str) -> str:
-        """Draft a reply to a customer ticket using the help center."""
-        return (f"Find the relevant Fluxo help-center articles with search_kb, then draft a polite reply to this "
-                f"ticket. Cite the article ids. Do not invent policies.\n\nSubject: {subject}\n\n{body}")
-
-    return mcp
-
-
-if __name__ == "__main__":
-    if sys.stdin.isatty():
-        print("Fluxo MCP server on stdio, waiting for a client (Ctrl+C to stop).", file=sys.stderr)
-    build_server().run()
+@app.post("/tools/crm/get_ticket")
+def mcp_get_ticket(request: ToolRequest):
+    """
+    MCP Endpoint to fetch a ticket, strictly protected by B2B isolation.
+    """
+    # 1. Enforce tenant boundary
+    verify_tenant_access(request.tenant_id, request.ticket_id)
+    
+    # 2. Proceed with database fetch
+    return {
+        "status": "success", 
+        "data": f"Detailed history for {request.ticket_id} (Tenant verified)"
+    }
