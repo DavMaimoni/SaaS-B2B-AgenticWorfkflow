@@ -29,32 +29,35 @@ class TokenUsageMonitor:
 # These functions ensure that eval/run_eval.py and old tests continue to pass
 # without interfering with the new B2B architecture.
 
-class MockRecord:
-    """A dummy record object to mock the behavior of the original run tracker."""
-    def __init__(self):
-        self.metrics = {}
+class MockRecord(dict):
+    """A mock record dict that supports both attribute and dictionary key access for eval/run_eval.py."""
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setdefault("latency_ms", 0.0)
+        self.setdefault("input_tokens", 0)
+        self.setdefault("output_tokens", 0)
+        self.setdefault("total_tokens", 0)
+
     def add(self, *args, **kwargs):
         pass
+
     def flush(self):
         pass
 
 @contextmanager
 def run_record(*args, **kwargs):
-    """Context manager to record a run during evaluation."""
-    yield MockRecord()
+    """Context manager to record a run during evaluation, returning a subscriptable mock record."""
+    rec = MockRecord()
+    yield rec
 
 def log_run(*args, **kwargs) -> None:
-    """Stub for legacy log_run calls."""
     pass
 
-def load_runs(*args, **kwargs) -> List[dict]:
-    """Stub for legacy load_runs calls."""
+def load_runs(*args, **kwargs) -> list:
     return []
 
-def alerts(*args, **kwargs) -> List[dict]:
-    """Stub for legacy alerts calls."""
+def alerts(*args, **kwargs) -> list:
     return []
 
 def kpis(*args, **kwargs) -> dict:
-    """Stub for legacy KPIs calculations."""
     return {}
