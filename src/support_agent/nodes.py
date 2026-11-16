@@ -1,7 +1,7 @@
 from langchain_core.messages import ToolMessage, AIMessage
-from src.support_agent.state import SupportAgentState
-from src.support_agent.tools import get_crm_ticket, update_crm_ticket
-from src.support_agent.llm import get_llm
+from support_agent.state import SupportAgentState
+from support_agent.tools import get_crm_ticket, update_crm_ticket
+from support_agent.llm import get_llm
 
 tools = [get_crm_ticket, update_crm_ticket]
 
@@ -15,14 +15,11 @@ def agent_node(state: SupportAgentState) -> dict:
                 f"Always use this tenant_id when calling CRM or KB tools."
     )
     
-    # 1. Instanciation du LLM locale
     base_llm = get_llm(name="small")
     
-    # 2. Sécurité pour les tests ou les anciens LLMs qui n'ont pas bind_tools
     if hasattr(base_llm, "bind_tools"):
         llm_with_tools = base_llm.bind_tools(tools)
     else:
-        # Fallback si le modèle ne supporte pas bind_tools (ex: mock dans les tests)
         llm_with_tools = base_llm 
     
     response = llm_with_tools.invoke([system_instruction] + messages)
