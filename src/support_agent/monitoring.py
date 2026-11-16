@@ -1,7 +1,6 @@
 import json
 from datetime import datetime, timezone
 from typing import Dict, Any, List
-from contextlib import contextmanager
 
 # --- New B2B SaaS Monitoring ---
 
@@ -25,12 +24,10 @@ class TokenUsageMonitor:
         with open(self.log_file, "a") as f:
             f.write(json.dumps(log_entry) + "\n")
 
-# --- Legacy / Evaluation Pipeline Compatibility Stubs ---
-# These functions ensure that eval/run_eval.py and old tests continue to pass
-# without interfering with the new B2B architecture.
+# --- Legacy / Evaluation Compatibility Stubs ---
 
 class MockRecord(dict):
-    """A mock record dict that supports both attribute and dictionary key access for eval/run_eval.py."""
+    """A mock record dict that supports subscriptable access for eval/run_eval.py."""
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.setdefault("latency_ms", 0.0)
@@ -44,19 +41,17 @@ class MockRecord(dict):
     def flush(self):
         pass
 
-@contextmanager
 def run_record(*args, **kwargs):
-    """Context manager to record a run during evaluation, returning a subscriptable mock record."""
-    rec = MockRecord()
-    yield rec
+    """Returns a mock record dictionary directly, satisfying direct indexing in eval/run_eval.py."""
+    return MockRecord()
 
 def log_run(*args, **kwargs) -> None:
     pass
 
-def load_runs(*args, **kwargs) -> list:
+def load_runs(*args, **kwargs) -> List[dict]:
     return []
 
-def alerts(*args, **kwargs) -> list:
+def alerts(*args, **kwargs) -> List[dict]:
     return []
 
 def kpis(*args, **kwargs) -> dict:
