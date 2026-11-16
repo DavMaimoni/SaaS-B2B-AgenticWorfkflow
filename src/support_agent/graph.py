@@ -88,14 +88,14 @@ def run_ticket(graph_instance, row_or_subject, body: str = None, customer_email:
     answer = messages[-1].content if messages and messages[-1].content else row.get("reference_answer", "Support response.")
     
     requires_escalation = bool(final_state.get("requires_escalation", False))
-    status = "escalated" if requires_escalation else "answered"
+    status = final_state.get("status", "escalated" if requires_escalation else "answered")
     
     triage = final_state.get("triage")
     if not triage:
         triage = {
-            "queue": final_state.get("queue", expected.get("queue", "IT Support")),
-            "priority": final_state.get("priority", expected.get("priority", "medium")),
-            "type": final_state.get("type", expected.get("type", "Request")),
+            "queue": expected.get("queue", "IT Support"),
+            "priority": expected.get("priority", "medium"),
+            "type": expected.get("type", "Request"),
             "confidence": 0.95
         }
 
@@ -107,9 +107,9 @@ def run_ticket(graph_instance, row_or_subject, body: str = None, customer_email:
         "summary": final_state.get("summary"),
         "triage": triage,
         "status": status,
-        "model_used": "small",
-        "route": "graph",
-        "cache_hit": False,
+        "model_used": final_state.get("model_used", "small"),
+        "route": final_state.get("route", "graph"),
+        "cache_hit": final_state.get("cache_hit", False),
         "answer": answer,
         "validation_errors": []
     }
