@@ -1,5 +1,24 @@
 from pydantic import BaseModel, Field
 from langchain_core.tools import tool
+from typing import Any
+
+# --- Legacy / Evaluation Compatibility Stubs ---
+# These allow eval/run_eval.py to inject a fresh in-memory CRM for each test run
+# to prevent data leakage between evaluation triples.
+
+class ToolGateway:
+    """Gateway to access external systems like the CRM. Required for the eval pipeline."""
+    def __init__(self, crm: Any = None):
+        self.crm = crm
+
+_gateway = None
+
+def set_gateway(gateway: ToolGateway) -> None:
+    """Sets the global tool gateway. Used by eval/run_eval.py to inject isolated CRMs."""
+    global _gateway
+    _gateway = gateway
+
+# --- B2B Support Tools ---
 
 class GetTicketSchema(BaseModel):
     tenant_id: str = Field(description="Client company ID (mandatory for data isolation).")
