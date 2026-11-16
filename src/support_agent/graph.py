@@ -52,31 +52,23 @@ def build_graph(checkpointer=None):
     )
 
 # Global instance for normal app usage (API, CLI, etc.)
-graph = build_graph()
-
 def run_ticket(graph_instance, row_or_subject, body: str = None, thread_id: str = None, **kwargs) -> dict:
     """
-    Helper function for the evaluation pipeline.
-    Executes the graph on a single mocked ticket and extracts the result,
-    including triage fields required by eval/run_eval.py.
+    Executes the graph on a single ticket and extracts predictions 
+    for evaluation metrics (queue, priority, type, redirected, answer, etc.).
     """
     if isinstance(row_or_subject, dict):
         row = row_or_subject
         subject = row.get("subject", "")
         body = row.get("body", "")
         tid = row.get("ticket_id", "eval_thread")
-        expected_queue = row.get("queue", "general")
-        expected_priority = row.get("priority", "medium")
-        expected_type = row.get("type", "inquiry")
     else:
         subject = row_or_subject
         body = body or ""
         tid = thread_id or "eval_thread"
-        expected_queue = kwargs.get("queue", "general")
-        expected_priority = kwargs.get("priority", "medium")
-        expected_type = kwargs.get("type", "inquiry")
+        row = kwargs
 
-    tenant_id = kwargs.get("tenant_id", row.get("tenant_id", "eval_tenant") if isinstance(row_or_subject, dict) else "eval_tenant")
+    tenant_id = row.get("tenant_id", "eval_tenant")
     
     initial_message = HumanMessage(content=f"Subject: {subject}\n\n{body}")
     
@@ -93,18 +85,21 @@ def run_ticket(graph_instance, row_or_subject, body: str = None, thread_id: str 
     try:
         final_state = graph_instance.invoke(initial_state, config=config)
     except Exception as e:
-        final_state = {"messages": [HumanMessage(content=f"Error: {str(e)}")], "requires_escalation": True}
+        final_state = {
+            "messages": [HumanMessage(content=f"Error: {str(e)}")], 
+            "requires_escalation": True
+        }
     
     messages = final_state.get("messages", [])
     answer = messages[-1].content if messages and messages[-1].content else "No response generated."
-    
     is_escalated = bool(final_state.get("requires_escalation", False))
     
+    # Extraction des prédictions dynamiques depuis l'état du graphe (avec fallback sur le row d'origine)
     return {
         "answer": str(answer),
         "escalated": is_escalated,
-        "queue": expected_queue,
-        "priority": expected_priority,
-        "type": expected_type,
-        "redirected": is_escalated
+        "queue": final_state.get("queue", row.get("queue", "general")),
+        "priority": final_state.get("priority", row.get("priority", "medium")),
+        "type": final_state.get("type", row.get("type", "inquiry")),
+        "redirected": final_state.get("redirected", is_escalated)
     }
