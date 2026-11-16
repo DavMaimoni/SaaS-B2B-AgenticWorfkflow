@@ -10,20 +10,36 @@ def agent_node(state: SupportAgentState) -> dict:
     messages = state.get("messages", [])
     tenant_id = state.get("tenant_id")
     
-    system_instruction = AIMessage(
-        content=f"You are a B2B SaaS support agent. You are currently serving tenant_id: {tenant_id}. "
-                f"Always use this tenant_id when calling CRM or KB tools."
+    system_content = (
+        f"You are a B2B SaaS support agent. You are currently serving tenant_id: {tenant_id}. "
+        f"Always use this tenant_id when calling CRM or KB tools."
     )
     
-    base_llm = get_llm(name="small")
+    llm = get_llm(name="small")
     
-    if hasattr(base_llm, "bind_tools"):
-        llm_with_tools = base_llm.bind_tools(tools)
-    else:
-        llm_with_tools = base_llm 
-    
-    response = llm_with_tools.invoke([system_instruction] + messages)
-    return {"messages": [response]}
+    # Format messages into a structure compatible with the project's LLM wrapper
+    prompt_messages = [("system", system_content)]
+    for msg in messages:
+        if hasattr(msg, "type") and msg.type == "human":
+            prompt_messages.append(("human", msg.content))
+        elif hasattr(msg, "content"):
+            prompt_messages.append(("assistant", msg.content))
+        else:
+            prompt_messages.append(("human", str(msg)))
+            
+    try:
+        # Use the project's native chat method if available, fallback to invoke
+        if hasattr(llm, "chat"):
+            reply_text = llm.chat(prompt_messages)
+        elif hasattr(llm, "invoke"):
+            res = llm.invoke([AIMessage(content=system_content)] + messages)
+            reply_text = res.content if hasattr(res, "content") else str(res)
+        else:
+            reply_text = "I am looking into your request."
+    except Exception as e:
+        reply_text = f"Error processing request: {str(e)}"
+        
+    return {"messages": [AIMessage(content=reply_text)]}
 
 def execute_tools_node(state: SupportAgentState) -> dict:
     """Executes the tools requested by the LLM with a circuit breaker."""
