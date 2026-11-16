@@ -5,7 +5,7 @@ from src.support_agent.llm import get_llm # Assumes a pre-configured LLM instanc
 
 # Bind available tools to the LLM
 tools = [get_crm_ticket, update_crm_ticket]
-llm_with_tools = get_llm().bind_tools(tools)
+llm_with_tools = get_llm(name="agent").bind_tools(tools)
 
 def agent_node(state: SupportAgentState) -> dict:
     """
