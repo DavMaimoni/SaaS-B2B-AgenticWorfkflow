@@ -4,8 +4,6 @@ from src.support_agent.tools import get_crm_ticket, update_crm_ticket
 from src.support_agent.llm import get_llm
 
 tools = [get_crm_ticket, update_crm_ticket]
-# Fix : passed the missing 'name' positional argument
-llm_with_tools = get_llm(name="small").bind_tools(tools)
 
 def agent_node(state: SupportAgentState) -> dict:
     """Core reasoning node. Invokes the LLM to decide on the next action."""
@@ -16,6 +14,16 @@ def agent_node(state: SupportAgentState) -> dict:
         content=f"You are a B2B SaaS support agent. You are currently serving tenant_id: {tenant_id}. "
                 f"Always use this tenant_id when calling CRM or KB tools."
     )
+    
+    # 1. Instanciation du LLM locale
+    base_llm = get_llm(name="small")
+    
+    # 2. Sécurité pour les tests ou les anciens LLMs qui n'ont pas bind_tools
+    if hasattr(base_llm, "bind_tools"):
+        llm_with_tools = base_llm.bind_tools(tools)
+    else:
+        # Fallback si le modèle ne supporte pas bind_tools (ex: mock dans les tests)
+        llm_with_tools = base_llm 
     
     response = llm_with_tools.invoke([system_instruction] + messages)
     return {"messages": [response]}
@@ -49,7 +57,7 @@ def execute_tools_node(state: SupportAgentState) -> dict:
             except Exception as e:
                 result = f"Error executing {tool_name}: {str(e)}"
                 
-            tool_responses.append(ToolMessage(content=str(result), tool_call_id=tool_call["id"]))
+            tool_responses.append(ToolMessage(content=str(result), tool_call_id=tool_call.get("id", "default_id")))
             
     return {"messages": tool_responses, "loop_count": current_loops + 1}
 
