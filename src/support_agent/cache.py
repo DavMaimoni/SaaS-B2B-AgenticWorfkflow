@@ -31,3 +31,10 @@ class SemanticTenantCache:
             "response": response,
             "timestamp": time.time()
         }
+
+# --- Legacy / Evaluation Compatibility Stubs ---
+# Prevents eval/run_eval.py from crashing when it tries to clean up between runs.
+
+def reset_shared_cache() -> None:
+    """Stub for legacy evaluation scripts that expect a global cache reset."""
+    pass
